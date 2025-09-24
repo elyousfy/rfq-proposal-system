@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/**)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/toc_templates/**)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/orchestrator/**)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/tools/**)",
+      "Bash(ls:*)",
+      "Bash(npm start)",
+      "Bash(npm run:*)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/pipeline/**)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/llm/**)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/rag/**)",
+      "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/composer/**)",
+      "Bash(curl:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
