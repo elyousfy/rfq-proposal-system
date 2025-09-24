@@ -225,18 +225,27 @@ def generate_advanced_proposal(
     collection_name = safe_collection_name(f"rfq_{rfq_name}")
     print(f"📋 Using collection: {collection_name}")
 
-    # Use TOC template if provided, otherwise use default structure
+    # Always try to use uploaded TOC templates first
+    if not toc_template:
+        # Import here to avoid circular imports
+        from toc_extractor import get_toc_templates
+        templates = get_toc_templates()
+        if templates:
+            # Use the first available template
+            toc_template = templates[0]
+            print(f"🎯 Using uploaded TOC template: {toc_template.get('name', 'Unknown')}")
+
+    # Use TOC template if available
     if toc_template and toc_template.get("section_tree"):
         toc_nodes = toc_template_to_nodes(toc_template)
+        print(f"📋 Using template with {len(toc_nodes)} sections from uploaded TOC")
     else:
-        # Default fallback structure
+        print("⚠️ No TOC template found, using minimal default structure")
+        # Minimal fallback - user should upload templates
         default_sections = [
             {"title": "Executive Summary", "level": 1, "order": 0, "parent": None},
             {"title": "Technical Approach", "level": 1, "order": 1, "parent": None},
-            {"title": "Implementation Plan", "level": 1, "order": 2, "parent": None},
-            {"title": "Team & Qualifications", "level": 1, "order": 3, "parent": None},
-            {"title": "Commercial Terms", "level": 1, "order": 4, "parent": None},
-            {"title": "Compliance Matrix", "level": 1, "order": 5, "parent": None},
+            {"title": "Commercial Terms", "level": 1, "order": 2, "parent": None},
         ]
         toc_nodes = [
             SectionNode(

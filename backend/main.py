@@ -948,19 +948,16 @@ async def export_proposal(format: str, proposal_data: dict):
     </div>
 """
             
-            # Add sections with either HTML content or markdown converted to HTML
+            # Add sections with proper content field
             for section in sections:
                 section_title = section.get('title', 'Untitled Section')
-                section_html = section.get('contentHtml', '')
-                section_content = section.get('contentMd', '')
-                
+                section_content = section.get('content', '')
+
                 html_content += f'\n    <div class="section">\n        <h2>{section_title}</h2>\n'
-                
-                # Use HTML content if available, otherwise convert markdown
-                if section_html:
-                    html_content += f'        <div>{section_html}</div>\n'
-                else:
-                    # Basic markdown to HTML conversion for legacy content
+
+                # Convert content to HTML
+                if section_content:
+                    # Basic markdown to HTML conversion
                     lines = section_content.split('\n')
                     in_list = False
                     in_blockquote = False
@@ -1046,22 +1043,14 @@ Document Type: Business Proposal
             
             for section in sections:
                 section_title = section.get('title', 'Untitled Section')
-                section_html = section.get('contentHtml', '')
-                section_content = section.get('contentMd', '')
-                
+                section_content = section.get('content', '')
+
                 docx_content += f"{section_title.upper()}\n"
                 docx_content += "=" * len(section_title) + "\n\n"
-                
-                # Use HTML content if available, otherwise use markdown
-                if section_html:
-                    # Convert HTML to plain text (basic conversion)
-                    import re
-                    # Remove HTML tags and convert to plain text
-                    plain_text = re.sub('<[^<]+?>', '', section_html)
-                    plain_text = plain_text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
-                    docx_content += plain_text + "\n\n"
-                else:
-                    # Clean up markdown for plain text
+
+                # Process content as markdown/plain text
+                if section_content:
+                    # Clean up content for plain text
                     lines = section_content.split('\n')
                     for line in lines:
                         line = line.strip()
