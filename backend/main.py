@@ -726,36 +726,45 @@ async def get_all_evaluations():
 @app.post("/generate_proposal")
 async def generate_proposal(request: GenerateProposalRequest):
     """
-    Generate a complete proposal based on RFQ analysis and template.
+    Generate a sophisticated proposal using advanced generation system with current database.
     """
-    from proposal_generator import generate_full_proposal
+    from advanced_generator import generate_advanced_proposal
+    from toc_extractor import get_toc_templates
     from datetime import datetime
 
     try:
-        print(f"🤖 Generating proposal for RFQ: {request.rfqName}")
+        print(f"🤖 Generating advanced proposal for RFQ: {request.rfqName}")
         print(f"📋 Structure: {request.structure}, Tone: {request.tone}")
+
+        # Get TOC template if provided
+        toc_template = None
         if request.tocTemplateId:
             print(f"🎯 Using TOC Template: {request.tocTemplateId}")
+            templates = get_toc_templates()
+            toc_template = next((t for t in templates if t.get("id") == request.tocTemplateId), None)
+            if not toc_template:
+                print(f"⚠️ TOC Template {request.tocTemplateId} not found, using default structure")
 
-        proposal = generate_full_proposal(
+        # Generate proposal using advanced system with current database
+        proposal = generate_advanced_proposal(
             rfq_name=request.rfqName,
-            structure=request.structure,
+            toc_template=toc_template,
             tone=request.tone,
-            requirements=request.requirements,
-            include_compliance=request.includeCompliance,
-            toc_template_id=request.tocTemplateId
+            top_k=6
         )
 
         proposal["generated_at"] = datetime.now().isoformat()
 
-        print(f"✅ Generated proposal with {len(proposal['sections'])} sections")
+        print(f"✅ Generated advanced proposal with {len(proposal['sections'])} sections")
         return {
             "status": "success",
             "proposal": proposal
         }
 
     except Exception as e:
-        print(f"❌ Error generating proposal: {e}")
+        print(f"❌ Error generating advanced proposal: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "status": "error",
             "message": str(e)
@@ -764,32 +773,42 @@ async def generate_proposal(request: GenerateProposalRequest):
 @app.post("/generate_section")
 async def generate_section(request: GenerateSectionRequest):
     """
-    Generate a specific proposal section.
+    Generate a specific proposal section using advanced generation system.
     """
-    from proposal_generator import generate_proposal_section
-    
+    from advanced_generator import generate_advanced_section
+    from db import safe_collection_name
+
     try:
-        print(f"🤖 Generating section: {request.sectionType} for RFQ: {request.rfqName}")
-        
-        content = generate_proposal_section(
-            section_type=request.sectionType,
-            rfq_name=request.rfqName,
-            context=request.context,
-            requirements=request.requirements,
-            tone=request.tone
+        print(f"🤖 Generating advanced section: {request.sectionType} for RFQ: {request.rfqName}")
+
+        collection_name = safe_collection_name(f"rfq_{request.rfqName}")
+
+        section_result = generate_advanced_section(
+            section_title=request.sectionType,
+            rfq_collection=collection_name,
+            level=1,
+            outline_path=request.sectionType,
+            top_k=6
         )
-        
-        print(f"✅ Generated section: {request.sectionType}")
+
+        print(f"✅ Generated advanced section: {request.sectionType}")
         return {
             "status": "success",
             "section": {
                 "type": request.sectionType,
-                "content": content
+                "title": section_result.get("title", request.sectionType),
+                "content": section_result.get("content", ""),
+                "notes": section_result.get("notes", []),
+                "risks": section_result.get("risks", []),
+                "assumptions": section_result.get("assumptions", []),
+                "image_suggestions": section_result.get("image_suggestions", [])
             }
         }
-        
+
     except Exception as e:
-        print(f"❌ Error generating section: {e}")
+        print(f"❌ Error generating advanced section: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "status": "error",
             "message": str(e)
