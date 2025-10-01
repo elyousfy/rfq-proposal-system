@@ -18,6 +18,12 @@ interface TOCTemplate {
     max_depth: number;
     created_at: string;
   };
+  statistics?: {
+    total_sections: number;
+    total_subsections: number;
+    total_words: number;
+    hierarchy_depth: number;
+  };
 }
 
 interface TOCTemplateSelectorProps {
@@ -226,7 +232,7 @@ export function TOCTemplateSelector({ onApplyTemplate }: TOCTemplateSelectorProp
                 <option value="">Select a TOC template...</option>
                 {templates.map((template) => (
                   <option key={template.id} value={template.id}>
-                    {template.name} ({template.metadata.total_sections} sections)
+                    {template.name} ({template.statistics?.total_sections || template.metadata?.total_sections || template.sections?.length || 0} sections{template.statistics?.total_subsections ? `, ${template.statistics.total_subsections} subsections` : ''})
                   </option>
                 ))}
               </select>

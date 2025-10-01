@@ -10,11 +10,21 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 from db import get_chroma, search, safe_collection_name
-from advanced_prompts import build_prompt, pick_prompt_type, STRICT_JSON_SCHEMA, SYSTEM_ROLE
+from prompts import (
+    build_prompt,
+    pick_prompt_type,
+    build_template_prompt,
+    build_refine_prompt,
+    STRICT_JSON_SCHEMA,
+    DRAFT_SYSTEM_ROLE,
+    REFINE_SYSTEM_ROLE,
+    DRAFT_MODEL,
+    REFINE_MODEL,
+    MAX_CONTEXT_CHARS
+)
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-GENERATION_MODEL = "gpt-4o"
 
 @dataclass
 class SectionNode:
@@ -53,15 +63,24 @@ def _retrieve_context_langchain(
     # Try to get additional context from other collections if they exist
     kb_map: Dict[str, List[str]] = {}
 
-    # Check for global knowledge collections
-    for coll_name in ["proposals", "datasheets", "standards", "global"]:
-        try:
-            kb_docs = search(section_title, k=max(3, top_k // 2), collection=coll_name)
-            if kb_docs:
-                kb_map[coll_name] = [doc.page_content for doc in kb_docs]
-        except:
-            # Collection doesn't exist or error occurred, skip
-            continue
+    # CRITICAL: Retrieve from TEMPLATES collection (uploaded old proposals)
+    # This is where we learn how to write each section
+    try:
+        template_docs = search(section_title, k=top_k, collection="templates")
+        if template_docs:
+            kb_map["templates"] = [doc.page_content for doc in template_docs]
+            print(f"📚 Retrieved {len(template_docs)} template examples for '{section_title}'")
+    except Exception as e:
+        print(f"⚠️ Could not retrieve from templates collection: {e}")
+
+    # TODO: Future expansion - add more collections here
+    # for coll_name in ["proposals", "datasheets", "standards", "global"]:
+    #     try:
+    #         kb_docs = search(section_title, k=max(3, top_k // 2), collection=coll_name)
+    #         if kb_docs:
+    #             kb_map[coll_name] = [doc.page_content for doc in kb_docs]
+    #     except:
+    #         continue
 
     return rfq_texts, rfq_ids, kb_map
 
@@ -71,13 +90,17 @@ def generate_advanced_section(
     level: int = 1,
     outline_path: str = "",
     top_k: int = 5,
+    template_data: Optional[Dict] = None,
     temperature: float = 0.4,
 ) -> Dict:
     """
-    Generate a sophisticated proposal section using advanced prompts and two-pass generation.
-    Uses current database system but with advanced generation logic.
+    Generate a sophisticated proposal section using TWO-PASS generation:
+    Pass 1: Draft with cheap model (gpt-4o-mini)
+    Pass 2: Refine with expensive model (gpt-4o)
+
+    template_data: dict with keys: writing_sample, target_words, table_count, image_count
     """
-    print(f"🎯 Generating advanced section: {section_title}")
+    print(f"🎯 Generating section: {section_title}")
 
     # Retrieve context using current system
     rfq_texts, rfq_ids, kb_map = _retrieve_context_langchain(
@@ -86,36 +109,47 @@ def generate_advanced_section(
         top_k=top_k,
     )
 
-    rfq_excerpt = "\n".join(rfq_texts)
+    rfq_excerpt = "\n".join(rfq_texts)[:MAX_CONTEXT_CHARS]
 
     # Build comprehensive context from all available sources
-    context_parts = [f"[RFQ CONTEXT — {rfq_collection}]\n" + "\n".join(rfq_texts)]
+    context_parts = [f"[RFQ CONTEXT]\n" + "\n".join(rfq_texts)]
 
     for coll_name, texts in kb_map.items():
         if texts:
-            context_parts.append(f"[KNOWLEDGE — {coll_name}]\n" + "\n".join(texts))
+            context_parts.append(f"[{coll_name.upper()}]\n" + "\n".join(texts))
 
-    context = "\n\n".join(context_parts)
+    full_context = "\n\n".join(context_parts)
+    context = full_context[:MAX_CONTEXT_CHARS]  # Apply context limit
 
-    # Choose specialized prompt type based on section title
-    section_type = pick_prompt_type(section_title)
-    print(f"📝 Using prompt type: {section_type}")
+    # Choose prompt based on whether we have template data
+    if template_data and template_data.get('writing_sample'):
+        print(f"📝 Using TEMPLATE-STYLE prompt")
+        prompt = build_template_prompt(
+            title=section_title,
+            level=level,
+            outline_path=outline_path,
+            rfq_excerpt=rfq_excerpt,
+            context=context,
+            template_data=template_data
+        )
+    else:
+        print(f"📝 Using FALLBACK prompt (no template)")
+        section_type = pick_prompt_type(section_title)
+        prompt = build_prompt(
+            section_type,
+            title=section_title,
+            level=level,
+            outline_path=outline_path,
+            rfq_excerpt=rfq_excerpt,
+            context=context,
+        )
 
-    prompt = build_prompt(
-        section_type,
-        title=section_title,
-        level=level,
-        outline_path=outline_path,
-        rfq_excerpt=rfq_excerpt,
-        context=context,
-    )
-
-    # First pass: Generate draft
-    print(f"🤖 Generating draft...")
+    # PASS 1: Generate draft with CHEAP model
+    print(f"🤖 DRAFT: Using {DRAFT_MODEL}...")
     response = client.chat.completions.create(
-        model=GENERATION_MODEL,
+        model=DRAFT_MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM_ROLE},
+            {"role": "system", "content": DRAFT_SYSTEM_ROLE},
             {"role": "user", "content": prompt},
         ],
         temperature=temperature,
@@ -146,34 +180,33 @@ def generate_advanced_section(
     output.setdefault("risks", [])
     output.setdefault("assumptions", [])
 
+    print(f"✅ Draft generated ({len(output.get('content', ''))} chars)")
     return output
 
 def refine_section_advanced(
     title: str,
     rfq_excerpt: str,
     draft: str,
+    template_style_notes: str = "",
     temperature: float = 0.2
 ) -> Dict:
     """
-    Second pass: Refine the generated section for better quality.
+    PASS 2: Refine the generated section using EXPENSIVE model (gpt-4o).
+    Improves clarity, compliance, and matches template style.
     """
-    print(f"✨ Refining section: {title}")
+    print(f"✨ REFINE: Using {REFINE_MODEL}...")
 
-    refine_prompt = (
-        f"TITLE: {title}\n\n"
-        f"[RFQ EXCERPT]\n{rfq_excerpt}\n\n"
-        f"[DRAFT TO EDIT]\n{draft}\n\n"
-        f"INSTRUCTIONS:\n"
-        f"1) Improve clarity, structure, and compliance.\n"
-        f"2) Preserve factual grounding. Do NOT invent content.\n"
-        f"3) Preserve this STRICT JSON schema exactly (no extra text outside the JSON):\n"
-        f"{STRICT_JSON_SCHEMA}\n"
+    # Use centralized refine prompt from prompts.py
+    refine_prompt = build_refine_prompt(
+        draft=draft,
+        rfq_excerpt=rfq_excerpt[:MAX_CONTEXT_CHARS],
+        template_style_notes=template_style_notes
     )
 
     response = client.chat.completions.create(
-        model=GENERATION_MODEL,
+        model=REFINE_MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM_ROLE},
+            {"role": "system", "content": REFINE_SYSTEM_ROLE},
             {"role": "user", "content": refine_prompt},
         ],
         temperature=temperature,
@@ -189,8 +222,10 @@ def refine_section_advanced(
             end = raw.rfind("}") + 1
             output = json.loads(raw[start:end])
         except Exception:
+            print(f"❌ Refine failed to parse JSON: {raw[:200]}...")
             raise ValueError(f"Refinement failed. Raw response: {raw}")
 
+    print(f"✅ Refined section ({len(output.get('content', ''))} chars)")
     return output
 
 def toc_template_to_nodes(toc_template: Dict[str, Any]) -> List[SectionNode]:
@@ -214,12 +249,20 @@ def generate_advanced_proposal(
     rfq_name: str,
     toc_template: Optional[Dict[str, Any]] = None,
     tone: str = "professional",
-    top_k: int = 6
+    top_k: int = 6,
+    session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Generate a complete proposal using advanced system with current database.
+    Supports pause/stop/continue via session_id.
     """
+    from generation_control import controller, GenerationStatus
+
     print(f"🎯 Generating advanced proposal for RFQ: {rfq_name}")
+
+    # Initialize session if provided
+    if session_id:
+        controller.create_session(session_id)
 
     # Convert RFQ name to collection name using current system
     collection_name = safe_collection_name(f"rfq_{rfq_name}")
@@ -260,27 +303,76 @@ def generate_advanced_proposal(
     sections_payload: List[Dict[str, Any]] = []
     evidence_log: Dict[str, Any] = {"sections": []}
 
+    # Extract template data for matching sections to writing samples
+    template_section_map = {}
+    if toc_template:
+        # Get ai_writing_guidelines and detailed_sections from template
+        ai_guidelines = toc_template.get('ai_writing_guidelines', {})
+        detailed_sections = toc_template.get('detailed_sections', [])
+
+        # Build map of section titles to their template data
+        for section in detailed_sections:
+            section_title = section.get('title', '')
+            template_section_map[section_title] = {
+                'writing_sample': section.get('content_sample', ''),
+                'target_words': section.get('word_count', 200),
+                'table_count': section.get('table_count', 0),
+                'image_count': 1 if section.get('has_images') else 0,
+            }
+            # Also add subsections
+            for subsection in section.get('subsections', []):
+                sub_title = subsection.get('title', '')
+                template_section_map[sub_title] = {
+                    'writing_sample': subsection.get('content_sample', ''),
+                    'target_words': subsection.get('word_count', 100),
+                    'table_count': subsection.get('table_count', 0),
+                    'image_count': 1 if subsection.get('has_images') else 0,
+                }
+
+        print(f"📊 Template data available for {len(template_section_map)} sections")
+
     print(f"🔧 Processing {len(toc_nodes)} sections")
 
-    for node in toc_nodes:
+    # Update total sections count
+    if session_id:
+        controller.update_progress(session_id, '', 0, len(toc_nodes))
+
+    for idx, node in enumerate(toc_nodes):
+        # Check if we should continue (pause/stop handling)
+        if session_id:
+            if not controller.wait_if_paused(session_id):
+                print(f"⏹️ Generation stopped by user")
+                controller.set_status(session_id, GenerationStatus.STOPPED, "Stopped by user")
+                break
+
+            controller.update_progress(session_id, node.title, idx, len(toc_nodes))
+
         outline_path = node.path_str(toc_nodes)
-        print(f"\n[GEN] {outline_path}")
+        print(f"\n[GEN] ({idx+1}/{len(toc_nodes)}) {outline_path}")
+
+        # Get template data for this specific section
+        template_data = template_section_map.get(node.title, None)
+        if template_data:
+            print(f"📝 Using template data: {template_data['target_words']} words, {template_data['table_count']} tables")
 
         try:
-            # Generate draft using advanced system
+            # PASS 1: Generate draft using cheap model with template guidance
             draft_json = generate_advanced_section(
                 section_title=node.title,
                 rfq_collection=collection_name,
                 level=node.level,
                 outline_path=outline_path,
                 top_k=top_k,
+                template_data=template_data,  # Pass template data here
             )
 
-            # Refine the draft (second pass)
+            # PASS 2: Refine the draft using expensive model
+            template_style_notes = f"Target: {template_data['target_words']} words" if template_data else ""
             refined_json = refine_section_advanced(
                 title=node.title,
-                rfq_excerpt="",  # Will be populated internally
+                rfq_excerpt="",  # Will use from retrieval
                 draft=json.dumps(draft_json, ensure_ascii=False),
+                template_style_notes=template_style_notes,
             )
 
             # Collect for final proposal
@@ -321,6 +413,11 @@ def generate_advanced_proposal(
             })
 
     print(f"\n✅ Generated {len(sections_payload)} sections using advanced system")
+
+    # Mark as completed if using session
+    if session_id:
+        controller.set_status(session_id, GenerationStatus.COMPLETED, "Proposal generation completed")
+        controller.update_progress(session_id, "Completed", len(toc_nodes), len(toc_nodes))
 
     # Return proposal in format expected by frontend
     proposal_result = {

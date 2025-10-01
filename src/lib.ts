@@ -47,7 +47,7 @@ export interface Proposal {
   versions: ProposalVersionMeta[];
 }
 
-export type Page = "proposal" | "rfqbot" | "documents" | "evaluator";
+export type Page = "proposal" | "rfqbot" | "documents" | "evaluator" | "completed-proposals";
 export type DocMode = null | "rfqs" | "database";
 
 // --- Proposal Evaluator types

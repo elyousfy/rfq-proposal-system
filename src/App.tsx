@@ -4,7 +4,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 // Only the icons actually used in App.tsx
-import { FileText, Bot, FolderOpen, Gauge } from "lucide-react";
+import { FileText, Bot, FolderOpen, Gauge, Wand2, Archive } from "lucide-react";
 
 // Quill CSS for rich text editor
 import 'react-quill/dist/quill.snow.css';
@@ -15,6 +15,8 @@ import { DocumentsPage } from "./pages/DocumentPage.tsx";
 import { RfqOrchestrator } from "./modules/Chat";      // NOTE: capital C
 import { ProposalPage } from "./modules/Proposal";
 import EvaluatorPage from "./pages/EvaluatorPage";
+import ProposalWizardPage from "./pages/ProposalWizardPage";
+import CompletedProposalsPage from "./pages/CompletedProposalsPage";
 
 // Types (type-only import to satisfy verbatimModuleSyntax)
 import type {
@@ -53,6 +55,9 @@ const BASE_URL = "http://localhost:8000";
 export default function App() {
   const [page, setPage] = useState<Page>("proposal");
   const [docMode, setDocMode] = useState<DocMode>(null);
+
+  // Wizard mode state
+  const [wizardMode, setWizardMode] = useState(false);
 
   // Chatbot state
   const [messages, setMessages] = useState<Message[]>([
@@ -516,6 +521,7 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
   // AI-powered proposal generation with progress tracking
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentGeneratingSection, setCurrentGeneratingSection] = useState<string>("");
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
 
   // Function to simulate real-time section generation
   async function simulateRealTimeSectionGeneration(
@@ -590,11 +596,37 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
         console.log("🎯 Using TOC template:", selectedTocTemplateId);
       }
 
+      // Generate unique session ID for pause/stop/resume control
+      const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      console.log("🔑 Generated session ID:", sessionId);
+      setCurrentSessionId(sessionId);
+
+      // Start polling for generation status
+      const statusPollingInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${BASE_URL}/generation_status/${sessionId}`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            const currentSection = statusData.current_section || "";
+            const progress = `${statusData.completed_sections || 0}/${statusData.total_sections || 0}`;
+            setCurrentGeneratingSection(`${currentSection} (${progress})`);
+
+            // Stop polling if completed or stopped
+            if (statusData.status === "completed" || statusData.status === "stopped") {
+              clearInterval(statusPollingInterval);
+            }
+          }
+        } catch (err) {
+          console.warn("Status polling error:", err);
+        }
+      }, 1000); // Poll every 1 second
+
       const requestBody = {
         rfqName: rfqSelected,
         structure: "standard",
         tone: "professional",
         includeCompliance: true,
+        sessionId: sessionId,  // Add session ID for backend control
         ...(selectedTocTemplateId && { tocTemplateId: selectedTocTemplateId })
       };
 
@@ -603,6 +635,9 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
       });
+
+      // Stop polling when generation completes
+      clearInterval(statusPollingInterval);
 
       if (res.ok) {
         const data = await res.json();
@@ -673,6 +708,55 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
       setIsGenerating(false);
     }
   }
+
+  // Pause/Resume/Stop generation handlers
+  async function pauseGeneration() {
+    if (!currentSessionId) return;
+    try {
+      const res = await fetch(`${BASE_URL}/generation_pause/${currentSessionId}`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        console.log("⏸️ Generation paused");
+        setIsGenerating(false);
+      }
+    } catch (error) {
+      console.error("❌ Error pausing generation:", error);
+    }
+  }
+
+  async function resumeGeneration() {
+    if (!currentSessionId) return;
+    try {
+      const res = await fetch(`${BASE_URL}/generation_resume/${currentSessionId}`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        console.log("▶️ Generation resumed");
+        setIsGenerating(true);
+      }
+    } catch (error) {
+      console.error("❌ Error resuming generation:", error);
+    }
+  }
+
+  async function stopGeneration() {
+    if (!currentSessionId) return;
+    try {
+      const res = await fetch(`${BASE_URL}/generation_stop/${currentSessionId}`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        console.log("⏹️ Generation stopped");
+        setIsGenerating(false);
+        setCurrentSessionId(null);
+        setCurrentGeneratingSection("");
+      }
+    } catch (error) {
+      console.error("❌ Error stopping generation:", error);
+    }
+  }
+
   async function aiRewrite(tone: "concise" | "formal" | "marketing") {
     if (!selectedSection || !rfqSelected) {
       alert("Please select a section and RFQ first");
@@ -1118,8 +1202,23 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
           </div>
           <nav className="flex flex-col gap-2">
             <button
-              onClick={() => setPage("proposal")}
-              className={`flex items-center gap-3 px-3 py-2 rounded-xl transition ${page === "proposal"
+              onClick={() => {
+                setPage("proposal");
+                setWizardMode(true);
+              }}
+              className={`flex items-center gap-3 px-3 py-2 rounded-xl transition ${wizardMode && page === "proposal"
+                  ? "bg-blue-600 text-white"
+                  : "hover:bg-blue-50 dark:hover:bg-blue-950 text-blue-700 dark:text-blue-300"
+                }`}
+            >
+              <Wand2 className="w-5 h-5" /> Proposal Wizard
+            </button>
+            <button
+              onClick={() => {
+                setPage("proposal");
+                setWizardMode(false);
+              }}
+              className={`flex items-center gap-3 px-3 py-2 rounded-xl transition ${!wizardMode && page === "proposal"
                   ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
                   : "hover:bg-slate-100 dark:hover:bg-slate-800"
                 }`}
@@ -1146,6 +1245,16 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
             >
               <Gauge className="w-5 h-5" /> Evaluator
             </button>
+
+            <button
+              onClick={() => setPage("completed-proposals")}
+              className={`flex items-center gap-3 px-3 py-2 rounded-xl transition ${page === "completed-proposals"
+                  ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                  : "hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+            >
+              <Archive className="w-5 h-5" /> Completed Proposals
+            </button>
           </nav>
         </div>
         <div>
@@ -1164,11 +1273,11 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
             <FolderOpen className="w-5 h-5" /> Documents
           </button>
         </div>
-      </aside>
+        </aside>
 
       {/* Main */}
       <main className="flex-1 p-6 flex flex-col">
-        {page === "proposal" && (
+        {page === "proposal" && !wizardMode && (
           <ProposalPage
             rfqs={rfqs}
             rfqSelected={rfqSelected}
@@ -1193,6 +1302,9 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
             selectedTocTemplateId={selectedTocTemplateId}
             currentGeneratingSection={currentGeneratingSection}
             isGenerating={isGenerating}
+            onPauseGeneration={pauseGeneration}
+            onResumeGeneration={resumeGeneration}
+            onStopGeneration={stopGeneration}
             onVarChange={(key, value) =>
               setProposal((p) => ({
                 ...p,
@@ -1200,6 +1312,26 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
                 updatedAt: new Date().toISOString(),
               }))
             }
+          />
+        )}
+
+        {page === "proposal" && wizardMode && (
+          <ProposalWizardPage
+            rfqs={rfqs}
+            onRfqUpload={(files: FileList) => {
+              // Handle RFQ upload in wizard mode
+              console.log('RFQ upload in wizard:', files);
+            }}
+            onTemplateUpload={(files: FileList) => {
+              // Handle template upload in wizard mode
+              console.log('Template upload in wizard:', files);
+            }}
+            onProposalComplete={(generatedProposal: Proposal) => {
+              setProposal(generatedProposal);
+              setWizardMode(false);
+              setSelectedSectionId(generatedProposal.sections[0]?.id || null);
+            }}
+            BASE_URL={BASE_URL}
           />
         )}
 
@@ -1262,16 +1394,16 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
             console.log("🔍 All available RFQs:", rfqs);
             console.log("📌 Currently selected RFQ name:", rfqSelected);
             console.log("🔍 RFQ names in array:", rfqs.map(r => r.name));
-            
+
             const rfq = rfqs.find((r) => r.name === rfqSelected) || null;
             console.log("🎯 Selected RFQ for evaluation:", rfq);
-            
+
             if (!rfq) {
               console.error("❌ RFQ not found! Selected:", rfqSelected);
               console.error("❌ Available RFQ names:", rfqs.map(r => `"${r.name}"`));
               return;
             }
-            
+
             runRfqEvaluation(rfq);
           }}
           onLoadSaved={(rfqName) => {
@@ -1279,6 +1411,18 @@ const [selectedTocTemplateId, setSelectedTocTemplateId] = useState<string | null
             loadSavedEvaluation(rfqName);
           }}
           onSaveEvaluation={() => saveCurrentEvaluation(rfqSelected)}
+        />
+      )}
+
+      {page === "completed-proposals" && (
+        <CompletedProposalsPage
+          BASE_URL={BASE_URL}
+          onOpenProposal={(openedProposal: Proposal) => {
+            setProposal(openedProposal);
+            setPage("proposal");
+            setWizardMode(false);
+            setSelectedSectionId(openedProposal.sections[0]?.id || null);
+          }}
         />
       )}
 

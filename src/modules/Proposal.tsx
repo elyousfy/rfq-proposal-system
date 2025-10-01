@@ -13,11 +13,22 @@ import {
     ChevronDown,
     Type,
     Code,
+    Wand2,
+    Settings,
+    Eye,
+    Archive,
+    Pause,
+    Play,
+    StopCircle,
 } from "lucide-react";
 
 import { SimpleRichTextEditor } from "../components/SimpleRichTextEditor";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { TOCTemplateSelector } from "../components/TOCTemplateSelector";
+import RFQSelectionPage from "../pages/RFQSelectionPage";
+import TemplateSelectionPage from "../pages/TemplateSelectionPage";
+import TOCValidationPage from "../pages/TOCValidationPage";
+import ProposalGenerationPage from "../pages/ProposalGenerationPage";
 import type {
     RFQItem,
     Proposal,
@@ -37,6 +48,7 @@ export function ProposalPage(props: {
     setSelectedSectionId: (id: string | null) => void;
 
     addSection: () => void;
+    addSubsection: (parentId: string) => void;
     deleteSection: (id: string) => void;
     updateSectionContent: (id: string, md: string) => void;
     updateSectionContentHtml: (id: string, html: string) => void;
@@ -57,6 +69,9 @@ export function ProposalPage(props: {
     selectedTocTemplateId?: string | null;
     currentGeneratingSection?: string;
     isGenerating?: boolean;
+    onPauseGeneration?: () => void;
+    onResumeGeneration?: () => void;
+    onStopGeneration?: () => void;
 }) {
     const {
         rfqs,
@@ -83,7 +98,20 @@ export function ProposalPage(props: {
         selectedTocTemplateId,
         currentGeneratingSection,
         isGenerating,
+        onPauseGeneration,
+        onResumeGeneration,
+        onStopGeneration,
     } = props;
+
+    // Save proposal to completed proposals
+    const saveToCompleted = () => {
+        if ((window as any).saveCompletedProposal) {
+            (window as any).saveCompletedProposal(proposal);
+            alert('✅ Proposal saved to Completed Proposals!');
+        } else {
+            alert('❌ Save function not available. Please try again.');
+        }
+    };
 
     const selectedSection = useMemo(() => {
         // Find section in main sections
@@ -101,6 +129,16 @@ export function ProposalPage(props: {
     }, [proposal, selectedSectionId]);
 
     const [editorMode, setEditorMode] = useState<"rich" | "markdown">("rich");
+
+    // Wizard state
+    const [showWizard, setShowWizard] = useState(false);
+    const [wizardStep, setWizardStep] = useState(0);
+    const [wizardData, setWizardData] = useState({
+        selectedRFQ: rfqSelected,
+        selectedTemplate: null as string | null,
+        tocSections: [] as any[],
+        generatedSections: [] as any[]
+    });
 
     return (
         <section className="flex flex-col h-full gap-4">
@@ -135,11 +173,18 @@ export function ProposalPage(props: {
                     className="flex-1 bg-transparent border rounded-xl px-3 py-2 text-sm"
                 />
 
+
                 <button
                     onClick={() => saveVersion()}
                     className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border hover:bg-slate-100 dark:hover:bg-slate-800"
                 >
                     <Save className="w-4 h-4" /> Save Version
+                </button>
+                <button
+                    onClick={saveToCompleted}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-green-300 text-green-700 hover:bg-green-50 dark:border-green-700 dark:text-green-300 dark:hover:bg-green-950"
+                >
+                    <Archive className="w-4 h-4" /> Save to Completed
                 </button>
                 <button
                     onClick={exportPdf}
@@ -220,6 +265,16 @@ export function ProposalPage(props: {
                         </div>
                         <div className="flex items-center gap-2">
                             <button
+                                onClick={() => setShowWizard(true)}
+                                disabled={isGenerating}
+                                className={`inline-flex items-center gap-1 text-sm px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors ${
+                                    isGenerating ? "opacity-50 cursor-not-allowed" : ""
+                                }`}
+                            >
+                                <Wand2 className="w-4 h-4" />
+                                {isGenerating ? "Generating..." : "Generate with Wizard"}
+                            </button>
+                            <button
                                 onClick={aiDraftFromRFQ}
                                 disabled={isGenerating}
                                 className={`inline-flex items-center gap-1 text-sm px-2 py-1 rounded-lg border ${
@@ -229,8 +284,38 @@ export function ProposalPage(props: {
                                 }`}
                             >
                                 <Sparkles className="w-4 h-4" />
-                                {isGenerating ? "Generating..." : "Draft from RFQ"}
+                                Quick Draft
                             </button>
+                            {isGenerating && onPauseGeneration && (
+                                <button
+                                    onClick={onPauseGeneration}
+                                    className="inline-flex items-center gap-1 text-sm px-2 py-1 rounded-lg border hover:bg-yellow-100 dark:hover:bg-yellow-900"
+                                    title="Pause generation"
+                                >
+                                    <Pause className="w-4 h-4" />
+                                    Pause
+                                </button>
+                            )}
+                            {!isGenerating && onResumeGeneration && (
+                                <button
+                                    onClick={onResumeGeneration}
+                                    className="inline-flex items-center gap-1 text-sm px-2 py-1 rounded-lg border hover:bg-green-100 dark:hover:bg-green-900"
+                                    title="Resume generation"
+                                >
+                                    <Play className="w-4 h-4" />
+                                    Resume
+                                </button>
+                            )}
+                            {isGenerating && onStopGeneration && (
+                                <button
+                                    onClick={onStopGeneration}
+                                    className="inline-flex items-center gap-1 text-sm px-2 py-1 rounded-lg border hover:bg-red-100 dark:hover:bg-red-900"
+                                    title="Stop generation"
+                                >
+                                    <StopCircle className="w-4 h-4" />
+                                    Stop
+                                </button>
+                            )}
                             <ToneMenu onPick={(t) => aiRewrite(t)} />
                             <button
                                 onClick={() => setShowEvaluator(true)}

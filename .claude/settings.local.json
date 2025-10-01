@@ -15,7 +15,12 @@
       "Read(//c/Users/alyou/Desktop/Work/Proposal Generation System (PGS)/gpt_method/Proposal_generator/composer/**)",
       "Bash(curl:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(gh:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": []

@@ -42,6 +42,7 @@ from db import (
 )
 from prompt import RFQ_EVALUATOR_PROMPT, RFQ_METADATA_PROMPT
 from utils import file_to_text
+from generation_control import controller, GenerationStatus
 
 # --- Setup ---
 load_dotenv()
@@ -190,6 +191,7 @@ class GenerateProposalRequest(BaseModel):
     tone: str = "professional"  # professional, formal, innovative
     includeCompliance: bool = True
     tocTemplateId: str = None  # Optional TOC template ID
+    sessionId: str = None  # Optional session ID for pause/stop/resume control
 
 class GenerateSectionRequest(BaseModel):
     rfqName: str
@@ -243,7 +245,7 @@ async def root():
             "/generate_proposal", "/generate_section", "/generate_compliance_matrix",
             "/get_proposal_templates", "/export_proposal/{format}",
             "/learn_proposal", "/generate_from_template", "/get_learned_templates",
-            "/extract_toc", "/get_toc_templates", "/apply_toc_template", "/get_toc_preview/{template_id}",
+            "/extract_toc", "/get_toc_templates", "/apply_toc_template", "/get_toc_preview/{template_id}", "/delete_template/{template_id}",
         ]
     }
 
@@ -750,7 +752,8 @@ async def generate_proposal(request: GenerateProposalRequest):
             rfq_name=request.rfqName,
             toc_template=toc_template,
             tone=request.tone,
-            top_k=6
+            top_k=6,
+            session_id=request.sessionId  # Pass session_id for pause/stop/resume control
         )
 
         proposal["generated_at"] = datetime.now().isoformat()
@@ -813,6 +816,38 @@ async def generate_section(request: GenerateSectionRequest):
             "status": "error",
             "message": str(e)
         }
+
+@app.get("/generation_status/{session_id}")
+async def get_generation_status(session_id: str):
+    """Get current generation status."""
+    status = controller.get_status(session_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "status": status['status'].value,
+        "current_section": status['current_section'],
+        "completed_sections": status['completed_sections'],
+        "total_sections": status['total_sections'],
+        "message": status['message']
+    }
+
+@app.post("/generation_pause/{session_id}")
+async def pause_generation(session_id: str):
+    """Pause proposal generation."""
+    success = controller.pause(session_id)
+    return {"status": "success" if success else "error", "paused": success}
+
+@app.post("/generation_resume/{session_id}")
+async def resume_generation(session_id: str):
+    """Resume paused generation."""
+    success = controller.resume(session_id)
+    return {"status": "success" if success else "error", "resumed": success}
+
+@app.post("/generation_stop/{session_id}")
+async def stop_generation(session_id: str):
+    """Stop proposal generation completely."""
+    success = controller.stop(session_id)
+    return {"status": "success" if success else "error", "stopped": success}
 
 @app.post("/generate_compliance_matrix")
 async def generate_compliance_matrix(request: ComplianceMatrixRequest):
@@ -1029,63 +1064,141 @@ async def export_proposal(format: str, proposal_data: dict):
             }
             
         elif format.lower() == "docx":
-            # Create structured content for DOCX
-            docx_content = f"""PROPOSAL: {title}
-================================================================================
+            # Generate proper DOCX file using python-docx
+            from docx import Document
+            from docx.shared import Inches, Pt
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.enum.style import WD_STYLE_TYPE
+            import io
+            import base64
+            import os
+            import tempfile
 
-RFQ: {rfq_name}
-Generated: {generated_date}
-Document Type: Business Proposal
+            # Create a new Document
+            doc = Document()
 
-================================================================================
+            # Set up styles
+            styles = doc.styles
 
-"""
-            
+            # Modify existing styles
+            title_style = styles['Heading 1']
+            title_style.font.size = Pt(18)
+            title_style.font.bold = True
+
+            header_style = styles['Heading 2']
+            header_style.font.size = Pt(14)
+            header_style.font.bold = True
+
+            subheader_style = styles['Heading 3']
+            subheader_style.font.size = Pt(12)
+            subheader_style.font.bold = True
+
+            # Add document title
+            title_para = doc.add_heading(title, level=0)
+            title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+            # Add document info
+            info_para = doc.add_paragraph()
+            info_para.add_run(f"RFQ: {rfq_name}").bold = True
+            info_para.add_run(f"\nGenerated: {generated_date}")
+            info_para.add_run(f"\nDocument Type: Business Proposal")
+
+            # Add separator
+            doc.add_paragraph("_" * 80)
+
+            # Process sections with proper formatting
             for section in sections:
                 section_title = section.get('title', 'Untitled Section')
                 section_content = section.get('content', '')
+                section_level = section.get('level', 1)
 
-                docx_content += f"{section_title.upper()}\n"
-                docx_content += "=" * len(section_title) + "\n\n"
+                # Add section header with appropriate level
+                if section_level == 1:
+                    doc.add_heading(section_title, level=1)
+                elif section_level == 2:
+                    doc.add_heading(section_title, level=2)
+                else:
+                    doc.add_heading(section_title, level=3)
 
-                # Process content as markdown/plain text
+                # Process section content with markdown parsing
                 if section_content:
-                    # Clean up content for plain text
                     lines = section_content.split('\n')
+                    current_para = None
+
                     for line in lines:
                         line = line.strip()
+
                         if line.startswith('### '):
-                            docx_content += f"\n{line[4:].upper()}\n"
-                            docx_content += "-" * len(line[4:]) + "\n"
+                            # Subsubheading
+                            doc.add_heading(line[4:], level=4)
+                            current_para = None
                         elif line.startswith('## '):
-                            docx_content += f"\n{line[3:].upper()}\n"
-                            docx_content += "-" * len(line[3:]) + "\n"
+                            # Subheading
+                            doc.add_heading(line[3:], level=3)
+                            current_para = None
                         elif line.startswith('# '):
-                            docx_content += f"\n{line[2:].upper()}\n"
-                            docx_content += "-" * len(line[2:]) + "\n"
+                            # Heading
+                            doc.add_heading(line[2:], level=2)
+                            current_para = None
                         elif line.startswith('- ') or line.startswith('* '):
-                            docx_content += f"  • {line[2:]}\n"
+                            # Bullet point
+                            bullet_para = doc.add_paragraph(line[2:], style='List Bullet')
+                            current_para = None
                         elif line.startswith('> '):
-                            docx_content += f"    \"{line[2:]}\"\n"
+                            # Quote
+                            quote_para = doc.add_paragraph()
+                            quote_run = quote_para.add_run(line[2:])
+                            quote_run.italic = True
+                            current_para = None
+                        elif line.startswith('[TABLE:') or line.startswith('[IMAGE:'):
+                            # Placeholder for tables/images
+                            placeholder_para = doc.add_paragraph()
+                            placeholder_run = placeholder_para.add_run(line)
+                            placeholder_run.italic = True
+                            placeholder_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            current_para = None
                         elif line:
-                            # Remove markdown formatting
-                            clean_line = line.replace('**', '').replace('*', '')
-                            docx_content += f"{clean_line}\n"
+                            # Regular text - handle bold/italic
+                            if current_para is None:
+                                current_para = doc.add_paragraph()
+
+                            # Simple markdown processing for bold text
+                            text = line
+                            while '**' in text:
+                                before, after = text.split('**', 1)
+                                current_para.add_run(before)
+                                if '**' in after:
+                                    bold_text, text = after.split('**', 1)
+                                    current_para.add_run(bold_text).bold = True
+                                else:
+                                    current_para.add_run('**' + after)
+                                    text = ''
+                            if text:
+                                current_para.add_run(text)
                         else:
-                            docx_content += "\n"
-                    
-                    docx_content += "\n\n"
-            
-            docx_content += f"""
-================================================================================
-Document generated on {generated_date}
-================================================================================"""
-            
+                            # Empty line - start new paragraph
+                            current_para = None
+
+                # Add spacing between sections
+                doc.add_paragraph()
+
+            # Save to temporary file and return base64 encoded content
+            # Use BytesIO instead of temp file to avoid Windows file locking issues
+            from io import BytesIO
+            docx_buffer = BytesIO()
+            doc.save(docx_buffer)
+            docx_buffer.seek(0)
+            docx_bytes = docx_buffer.read()
+            docx_buffer.close()
+
+            # Encode as base64 for transfer
+            docx_base64 = base64.b64encode(docx_bytes).decode('utf-8')
+
             return {
-                "status": "success", 
-                "format": "text",
-                "content": docx_content,
-                "filename": f"{title.replace(' ', '_')}.txt"
+                "status": "success",
+                "format": "docx",
+                "content": docx_base64,
+                "filename": f"{title.replace(' ', '_').replace('/', '_')}.docx"
             }
         else:
             return {
@@ -1270,24 +1383,156 @@ async def get_toc_templates():
     """
     Get all available TOC templates.
     """
-    from toc_extractor import get_toc_templates
+    from toc_extractor import get_saved_templates
 
     try:
-        templates = get_toc_templates()
+        # Get custom templates from toc_extractor
+        custom_templates = get_saved_templates()
+        print(f"📋 Loaded {len(custom_templates)} custom templates")
+
+        # DEBUG: Check if detailed_sections exists in first template
+        if custom_templates:
+            print(f"🔍 DEBUG First template keys: {list(custom_templates[0].keys())}")
+            print(f"🔍 DEBUG Has detailed_sections: {('detailed_sections' in custom_templates[0])}")
+            if 'detailed_sections' in custom_templates[0]:
+                print(f"🔍 DEBUG detailed_sections length: {len(custom_templates[0]['detailed_sections'])}")
+
+        # Predefined templates (fallback and examples)
+        predefined_templates = [
+            {
+                "id": "technical-services",
+                "name": "Technical Services Proposal",
+                "category": "Technical Services",
+                "description": "Standard template for technical consulting and services",
+                "sections": [
+                    "Executive Summary",
+                    "Understanding of Requirements",
+                    "Proposed Solution",
+                    "Technical Approach",
+                    "Project Timeline",
+                    "Team and Resources",
+                    "Risk Management",
+                    "Budget and Investment",
+                    "Terms and Conditions"
+                ],
+                "preview": "Comprehensive technical services proposal template with 9 sections."
+            },
+            {
+                "id": "consulting",
+                "name": "Management Consulting",
+                "category": "Consulting",
+                "description": "Template for management and strategy consulting proposals",
+                "sections": [
+                    "Executive Summary",
+                    "Current State Analysis",
+                    "Recommended Strategy",
+                    "Implementation Roadmap",
+                    "Change Management",
+                    "Success Metrics",
+                    "Our Expertise",
+                    "Investment Required"
+                ],
+                "preview": "Strategic consulting template focusing on analysis, strategy, and implementation."
+            },
+            {
+                "id": "software-dev",
+                "name": "Software Development",
+                "category": "Software Development",
+                "description": "Template for custom software development projects",
+                "sections": [
+                    "Project Overview",
+                    "Functional Requirements",
+                    "Technical Architecture",
+                    "Development Methodology",
+                    "Quality Assurance",
+                    "Deployment Strategy",
+                    "Maintenance and Support",
+                    "Project Timeline",
+                    "Cost Breakdown"
+                ],
+                "preview": "Complete software development proposal covering architecture, methodology, QA, and deployment."
+            },
+            {
+                "id": "research",
+                "name": "Research and Analysis",
+                "category": "Research",
+                "description": "Template for research and market analysis projects",
+                "sections": [
+                    "Research Objectives",
+                    "Methodology",
+                    "Data Collection Plan",
+                    "Analysis Framework",
+                    "Deliverables",
+                    "Timeline",
+                    "Research Team",
+                    "Budget"
+                ],
+                "preview": "Research-focused template with methodology, data collection, and analysis framework."
+            }
+        ]
+
+        # Combine custom and predefined templates
+        all_templates = custom_templates + predefined_templates
+        print(f"📋 Total templates available: {len(all_templates)}")
 
         return {
             "status": "success",
-            "templates": templates,
-            "count": len(templates)
+            "templates": all_templates,
+            "count": len(all_templates)
         }
 
     except Exception as e:
         print(f"❌ Error getting TOC templates: {e}")
+        # Return predefined templates as fallback
+        predefined_templates = [
+            {
+                "id": "technical-services",
+                "name": "Technical Services Proposal",
+                "category": "Technical Services",
+                "description": "Standard template for technical consulting and services",
+                "sections": [
+                    "Executive Summary",
+                    "Understanding of Requirements",
+                    "Proposed Solution",
+                    "Technical Approach",
+                    "Project Timeline",
+                    "Team and Resources",
+                    "Risk Management",
+                    "Budget and Investment",
+                    "Terms and Conditions"
+                ],
+                "preview": "Comprehensive technical services proposal template with 9 sections."
+            }
+        ]
+        return {
+            "status": "success",
+            "templates": predefined_templates,
+            "count": len(predefined_templates)
+        }
+
+@app.delete("/delete_template/{template_id}")
+async def delete_template(template_id: str):
+    """
+    Delete a template and all its associated data/files.
+    """
+    from toc_extractor import delete_template_by_id
+
+    try:
+        print(f"🗑️ Deleting template: {template_id}")
+        result = delete_template_by_id(template_id)
+
+        if result["status"] == "success":
+            print(f"✅ Template {template_id} deleted successfully")
+        else:
+            print(f"❌ Failed to delete template {template_id}: {result['message']}")
+
+        return result
+
+    except Exception as e:
+        print(f"❌ Error deleting template {template_id}: {e}")
         return {
             "status": "error",
-            "message": str(e),
-            "templates": [],
-            "count": 0
+            "message": str(e)
         }
 
 @app.post("/apply_toc_template")
